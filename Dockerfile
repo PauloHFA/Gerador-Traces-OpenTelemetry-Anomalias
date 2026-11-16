@@ -1,4 +1,4 @@
-# Multi-stage Docker build for TraceDrift
+# Multi-stage Docker build for Gerador-Traces-OpenTelemetry-Anomalias (tracedrift)
 FROM python:3.12-slim AS builder
 
 WORKDIR /app

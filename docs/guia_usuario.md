@@ -1,6 +1,6 @@
-# Guia do Usuário — TraceDrift
+# Guia do Usuário — Gerador-Traces-OpenTelemetry-Anomalias (tracedrift)
 
-Bem-vindo ao **TraceDrift**, o gerador sintético de traces OpenTelemetry e logs correlacionados com simulação de anomalias distribuídas.
+Bem-vindo ao **Gerador-Traces-OpenTelemetry-Anomalias** (CLI `tracedrift`), o gerador sintético de traces OpenTelemetry e logs correlacionados com simulação de anomalias distribuídas.
 
 ---
 

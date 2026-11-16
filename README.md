@@ -1,11 +1,11 @@
-# TraceDrift
+# Gerador-Traces-OpenTelemetry-Anomalias
 
 <p align="center">
-  <strong>Gerador sintético de traces OpenTelemetry, logs correlacionados e anomalias de observabilidade.</strong>
+  <strong>Gerador sintético de traces OpenTelemetry, logs correlacionados e anomalias de observabilidade *(CLI e pacote Python `tracedrift`)*.</strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/PauloHFA/TraceDrift/actions"><img src="https://img.shields.io/badge/CI-passing-brightgreen?style=flat-square" alt="CI"></a>
+  <a href="https://github.com/PauloHFA/Gerador-Traces-OpenTelemetry-Anomalias/actions"><img src="https://img.shields.io/badge/CI-passing-brightgreen?style=flat-square" alt="CI"></a>
   <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/Python-3.11%20%7C%203.12-blue?style=flat-square" alt="Python"></a>
   <a href="https://opentelemetry.io/"><img src="https://img.shields.io/badge/OpenTelemetry-1.25.0%20(SemConv)-purple?style=flat-square" alt="OTel"></a>
   <a href="https://github.com/astral-sh/ruff"><img src="https://img.shields.io/badge/code%20style-ruff-000000.svg?style=flat-square" alt="Ruff"></a>
@@ -58,8 +58,8 @@ Recomenda-se o uso do [uv](https://github.com/astral-sh/uv) (rápido e compatív
 
 ```bash
 # Clonar o repositório
-git clone https://github.com/PauloHFA/TraceDrift.git
-cd TraceDrift
+git clone https://github.com/PauloHFA/Gerador-Traces-OpenTelemetry-Anomalias.git
+cd Gerador-Traces-OpenTelemetry-Anomalias
 
 # Instalar o ambiente virtual e dependências
 uv sync --all-extras
@@ -192,4 +192,4 @@ uv run mypy --strict tracedrift
 ## 📄 Licença
 
 Distribuído sob a licença [Apache-2.0](LICENSE).
-Copyright (c) 2026 TraceDrift Contributors.
+Copyright (c) 2026 Gerador-Traces-OpenTelemetry-Anomalias (TraceDrift) Contributors.

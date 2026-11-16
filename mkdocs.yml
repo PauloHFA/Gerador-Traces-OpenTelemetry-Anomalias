@@ -1,8 +1,8 @@
-site_name: TraceDrift
+site_name: Gerador-Traces-OpenTelemetry-Anomalias
 site_description: Gerador sintético de traces OpenTelemetry, logs correlacionados e anomalias de observabilidade.
-site_author: TraceDrift Contributors
-repo_url: https://github.com/PauloHFA/TraceDrift
-repo_name: PauloHFA/TraceDrift
+site_author: Gerador-Traces-OpenTelemetry-Anomalias Contributors
+repo_url: https://github.com/PauloHFA/Gerador-Traces-OpenTelemetry-Anomalias
+repo_name: PauloHFA/Gerador-Traces-OpenTelemetry-Anomalias
 
 theme:
   name: material

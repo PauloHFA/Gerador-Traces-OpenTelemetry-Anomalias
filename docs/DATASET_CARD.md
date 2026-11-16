@@ -1,7 +1,7 @@
-# Dataset Card — TraceDrift Synthetic Dataset
+# Dataset Card — Gerador-Traces-OpenTelemetry-Anomalias Synthetic Dataset
 
 ## Visão Geral
-Este dataset foi gerado de forma **100% sintética** pelo **TraceDrift**, uma ferramenta para simulação realista de rastreamento distribuído (OpenTelemetry spans) e logs correlacionados com padrões de falha e degradações de microsserviços.
+Este dataset foi gerado de forma **100% sintética** pelo **Gerador-Traces-OpenTelemetry-Anomalias (`tracedrift`)**, uma ferramenta para simulação realista de rastreamento distribuído (OpenTelemetry spans) e logs correlacionados com padrões de falha e degradações de microsserviços.
 
 - **Natureza dos Dados**: Sintético (Livre de PII, senhas ou credenciais de produção).
 - **Modelo Gerador**: `gpt-4o-mini`
