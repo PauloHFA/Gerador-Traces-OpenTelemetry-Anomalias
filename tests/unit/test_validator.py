@@ -251,3 +251,65 @@ def test_validator_layer4_detects_real_email_and_secrets() -> None:
     assert report.layer_failed == 4
     assert any("E-mail com domínio real" in e for e in report.errors)
     assert any("credencial/token sensível" in e for e in report.errors)
+
+
+def test_validator_rejects_unknown_service_and_runs_layer4_even_when_layer3_fails() -> None:
+    validator = TraceValidator()
+    bp_unknown_svc = {
+        "scenario": "Unknown service",
+        "anomaly_type": "normal",
+        "spans": [
+            {
+                "ref": "s1",
+                "parent_ref": None,
+                "service_name": "invented-service",
+                "name": "op",
+                "kind": "SERVER",
+                "offset_ms": 0,
+                "duration_ms": 50,
+            }
+        ],
+    }
+    _, bp_rep = validator.validate_blueprint(bp_unknown_svc, allowed_services={"api-gateway"})
+    assert bp_rep.is_valid is False
+    assert bp_rep.layer_failed == 2
+
+    # Trace with BOTH Layer 3 violation (log outside span) AND Layer 4 violation (public IP)
+    trace = InternalTrace(
+        trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
+        spans=[
+            InternalSpan(
+                trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
+                span_id="0000000000000001",
+                parent_span_id=None,
+                name="root",
+                service_name="gateway",
+                kind="SPAN_KIND_SERVER",
+                start_time_unix_nano=1000,
+                end_time_unix_nano=2000,
+                attributes={"client.address": "8.8.4.4"},
+            )
+        ],
+        logs=[
+            InternalLog(
+                trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
+                span_id="0000000000000001",
+                timestamp_unix_nano=5000,  # Outside [1000, 2000]
+                severity_text="INFO",
+                severity_number=9,
+                body="Out of range log",
+                service_name="gateway",
+            )
+        ],
+        label=TraceLabel(
+            trace_id="4bf92f3577b34da6a3ce929d0e0e4736",
+            anomaly_type="normal",
+            is_anomalous=False,
+        ),
+        metadata=GenerationMetadata(model="test", prompt_version="v1", seed=42),
+    )
+
+    rep = validator.validate_materialized_trace(trace)
+    assert rep.is_valid is False
+    assert any("Violação temporal de log" in e for e in rep.errors)
+    assert any("IP público real detectado" in e for e in rep.errors)

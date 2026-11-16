@@ -127,3 +127,25 @@ async def test_streaming_exporter_writes_files(
     with open(tmp_path / "otlp_traces.json", encoding="utf-8") as f:
         otlp_data = json.load(f)
         assert validate_otlp_conformance(otlp_data) is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_exporter_resume_preserves_previous_traces_in_otlp(
+    sample_internal_trace: InternalTrace, tmp_path: Path
+) -> None:
+    exporter1 = StreamingTraceExporter(output_dir=tmp_path)
+    await exporter1.write_trace(sample_internal_trace)
+    await exporter1.finalize()
+
+    # Simulate resume with a second trace written by a new exporter instance
+    second_trace = sample_internal_trace.model_copy(
+        update={"trace_id": "11112222333344445555666677778888"}
+    )
+    exporter2 = StreamingTraceExporter(output_dir=tmp_path)
+    await exporter2.write_trace(second_trace)
+    await exporter2.finalize()
+
+    with open(tmp_path / "otlp_traces.json", encoding="utf-8") as f:
+        otlp_data = json.load(f)
+        assert validate_otlp_conformance(otlp_data) is True
+        assert len(otlp_data["resourceSpans"]) == 2

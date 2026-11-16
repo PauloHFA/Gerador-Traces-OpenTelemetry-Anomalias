@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -55,7 +56,9 @@ class TraceJudge:
         trace_id = trace_dict.get("trace_id", "unknown")
         label = trace_dict.get("label", {})
         anomaly_type = label.get("anomaly_type", "normal")
-        scenario = trace_dict.get("scenario", "Synthetic Trace")
+        scenario = (
+            trace_dict.get("scenario") or label.get("root_cause_summary") or f"Trace {anomaly_type}"
+        )
 
         prompt = self.judge_template.render(
             flow=flow,
@@ -86,8 +89,9 @@ class TraceJudge:
         traces_file: str | Path,
         flow: FlowDefinition,
         max_traces: int = 5,
+        concurrency: int = 4,
     ) -> JudgeEvaluationReport:
-        """Evaluates up to max_traces from a traces.jsonl file."""
+        """Evaluates up to max_traces from a traces.jsonl file concurrently."""
         report = JudgeEvaluationReport()
         path = Path(traces_file)
 
@@ -99,9 +103,16 @@ class TraceJudge:
                     if len(traces_to_eval) >= max_traces:
                         break
 
-        for trace_data in traces_to_eval:
-            score_item = await self.evaluate_single_trace(trace_data, flow)
-            report.scores.append(score_item)
+        if traces_to_eval:
+            semaphore = asyncio.Semaphore(max(1, concurrency))
+
+            async def _eval_bounded(td: dict[str, Any]) -> JudgeScore:
+                async with semaphore:
+                    return await self.evaluate_single_trace(td, flow)
+
+            report.scores = list(
+                await asyncio.gather(*[_eval_bounded(td) for td in traces_to_eval])
+            )
 
         if report.scores:
             report.total_evaluated = len(report.scores)

@@ -7,6 +7,7 @@ import json
 import shutil
 import time
 from pathlib import Path
+from typing import Any
 
 import typer
 import yaml
@@ -15,7 +16,7 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeRe
 from rich.table import Table
 
 from tracedrift.client import LLMClient
-from tracedrift.exporter import validate_otlp_conformance
+from tracedrift.exporter import validate_otlp_conformance, validate_otlp_logs_conformance
 from tracedrift.flow import FlowValidationError, load_flow_from_file
 from tracedrift.generator import TraceGenerator
 from tracedrift.models import AnomalyCatalog
@@ -32,6 +33,15 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+
+def _resolve_flow_path(flow: Path) -> Path:
+    """Prefere ./flow.yaml quando o caminho padrão do repositório não existir no CWD."""
+    if flow == Path("configs/e_commerce_flow.yaml") and not flow.exists():
+        local_flow = Path("flow.yaml")
+        if local_flow.exists():
+            return local_flow
+    return flow
 
 
 @app.command()
@@ -81,7 +91,7 @@ def plan(
     ),
 ) -> None:
     """Calcula e visualiza o plano determinístico de geração de traces e estimativa de tokens."""
-    flow_obj = load_flow_from_file(flow)
+    flow_obj = load_flow_from_file(_resolve_flow_path(flow))
     with open(anomalies, encoding="utf-8") as f:
         catalog = AnomalyCatalog.model_validate(yaml.safe_load(f))
 
@@ -157,7 +167,7 @@ def generate(
     ),
 ) -> None:
     """Executa a geração em lote assíncrona com controle de concorrência e exportação de datasets."""
-    flow_obj = load_flow_from_file(flow)
+    flow_obj = load_flow_from_file(_resolve_flow_path(flow))
     with open(anomalies, encoding="utf-8") as f:
         catalog = AnomalyCatalog.model_validate(yaml.safe_load(f))
 
@@ -213,6 +223,10 @@ def generate(
         stats = asyncio.run(generator.run())
 
     console.print("\n[bold green]Geração concluída![/bold green]")
+    if stats.budget_exceeded:
+        console.print(
+            "[yellow]Aviso: execução interrompida limpamente ao atingir --max-tokens-budget.[/yellow]"
+        )
     console.print(
         f" - Traces gerados com sucesso: [bold green]{stats.generated_success}[/bold green] / {count}"
     )
@@ -251,15 +265,26 @@ def validate(
         with open(target, encoding="utf-8") as f:
             data = json.load(f)
         try:
-            validate_otlp_conformance(data)
-            spans_count = sum(
-                len(ss.get("spans", []))
-                for rs in data.get("resourceSpans", [])
-                for ss in rs.get("scopeSpans", [])
-            )
-            console.print(
-                f"[bold green]OK (RNF02):[/bold green] Arquivo OTLP/JSON parseado via Protobuf com sucesso ({spans_count} spans verificados)."
-            )
+            if "resourceLogs" in data or "log" in target.name.lower():
+                validate_otlp_logs_conformance(data)
+                logs_count = sum(
+                    len(sl.get("logRecords", []))
+                    for rl in data.get("resourceLogs", [])
+                    for sl in rl.get("scopeLogs", [])
+                )
+                console.print(
+                    f"[bold green]OK (RNF02):[/bold green] Arquivo OTLP Logs/JSON parseado via Protobuf com sucesso ({logs_count} logs verificados)."
+                )
+            else:
+                validate_otlp_conformance(data)
+                spans_count = sum(
+                    len(ss.get("spans", []))
+                    for rs in data.get("resourceSpans", [])
+                    for ss in rs.get("scopeSpans", [])
+                )
+                console.print(
+                    f"[bold green]OK (RNF02):[/bold green] Arquivo OTLP/JSON parseado via Protobuf com sucesso ({spans_count} spans verificados)."
+                )
         except Exception as err:
             console.print(f"[bold red]Falha na validação OTLP Protobuf:[/bold red] {err}")
             raise typer.Exit(code=1) from err
@@ -351,6 +376,12 @@ def send(
                     st = int(s["startTimeUnixNano"])
                     if earliest_start is None or st < earliest_start:
                         earliest_start = st
+        for rl in payload.get("resourceLogs", []):
+            for sl in rl.get("scopeLogs", []):
+                for lr in sl.get("logRecords", []):
+                    lt = int(lr["timeUnixNano"])
+                    if earliest_start is None or lt < earliest_start:
+                        earliest_start = lt
 
         if earliest_start is not None:
             delta = now_nano - earliest_start
@@ -361,6 +392,10 @@ def send(
                         s["endTimeUnixNano"] = str(int(s["endTimeUnixNano"]) + delta)
                         for ev in s.get("events", []):
                             ev["timeUnixNano"] = str(int(ev["timeUnixNano"]) + delta)
+            for rl in payload.get("resourceLogs", []):
+                for sl in rl.get("scopeLogs", []):
+                    for lr in sl.get("logRecords", []):
+                        lr["timeUnixNano"] = str(int(lr["timeUnixNano"]) + delta)
 
     console.print(
         f"[cyan]Enviando traces para [bold]{endpoint}[/bold] via OTLP/{protocol.upper()}...[/cyan]"
@@ -413,7 +448,18 @@ def report(
     console.print(table)
 
     if card:
-        card_path = generate_dataset_card(dataset_dir, rep)
+        model_name = "gpt-4o-mini"
+        seed = 42
+        traces_file = dataset_dir / "traces.jsonl"
+        if traces_file.exists():
+            with open(traces_file, encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        meta = json.loads(line).get("metadata", {})
+                        model_name = str(meta.get("model", model_name))
+                        seed = int(meta.get("seed", seed))
+                        break
+        card_path = generate_dataset_card(dataset_dir, rep, model_name=model_name, seed=seed)
         console.print(f"[bold green]Dataset Card gerado com sucesso:[/bold green] {card_path}")
 
 
@@ -430,10 +476,6 @@ def visualize(
         raise typer.Exit(code=1) from err
 
 
-if __name__ == "__main__":
-    app()
-
-
 @app.command()
 def judge(
     traces_file: Path = typer.Argument(
@@ -443,6 +485,7 @@ def judge(
         Path("configs/e_commerce_flow.yaml"), "--flow", "-f", help="Fluxo de referência"
     ),
     count: int = typer.Option(5, "--count", "-n", help="Número de traces a avaliar"),
+    concurrency: int = typer.Option(4, "--concurrency", "-c", help="Avaliações simultâneas"),
     model: str | None = typer.Option(None, "--model", "-m", help="Modelo avaliador (LLM-as-judge)"),
 ) -> None:
     """Executa a avaliação LLM-as-judge em traces gerados avaliando realismo, coerência e riqueza."""
@@ -450,7 +493,7 @@ def judge(
         console.print(f"[bold red]Arquivo não encontrado:[/bold red] {traces_file}")
         raise typer.Exit(code=1)
 
-    flow_obj = load_flow_from_file(flow)
+    flow_obj = load_flow_from_file(_resolve_flow_path(flow))
     client = LLMClient(model=model)
 
     from tracedrift.judge import TraceJudge
@@ -460,9 +503,16 @@ def judge(
     )
 
     evaluator = TraceJudge(client=client)
-    report_data = asyncio.run(
-        evaluator.evaluate_traces_file(traces_file, flow=flow_obj, max_traces=count)
-    )
+
+    async def _run_judge() -> Any:
+        try:
+            return await evaluator.evaluate_traces_file(
+                traces_file, flow=flow_obj, max_traces=count, concurrency=concurrency
+            )
+        finally:
+            await client.close()
+
+    report_data = asyncio.run(_run_judge())
 
     table = Table(title="Resultado da Avaliação LLM-as-Judge", expand=True)
     table.add_column("Trace ID", style="dim", width=14)
@@ -489,3 +539,7 @@ def judge(
     console.print(
         f"\n[bold]Média Geral de Avaliação:[/bold] [bold green]{report_data.average_score:.2f} / 5.0[/bold green] (Meta: >= 4.0)"
     )
+
+
+if __name__ == "__main__":
+    app()

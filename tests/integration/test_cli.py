@@ -111,3 +111,41 @@ def test_cli_report_and_visualize(tmp_path: Path) -> None:
     assert viz_result.exit_code == 0
     assert "Waterfall" in viz_result.stdout
     assert "POST /checkout" in viz_result.stdout
+
+
+def test_cli_validate_otlp_logs_and_judge_registered(tmp_path: Path) -> None:
+    import json
+
+    help_res = runner.invoke(app, ["judge", "--help"])
+    assert help_res.exit_code == 0
+    assert "--concurrency" in help_res.stdout
+
+    otlp_logs = tmp_path / "otlp_logs.json"
+    otlp_logs.write_text(
+        json.dumps(
+            {
+                "resourceLogs": [
+                    {
+                        "resource": {"attributes": []},
+                        "scopeLogs": [
+                            {
+                                "scope": {"name": "tracedrift"},
+                                "logRecords": [
+                                    {
+                                        "timeUnixNano": "1700000000000000000",
+                                        "severityNumber": 9,
+                                        "severityText": "INFO",
+                                        "body": {"stringValue": "ok"},
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    res = runner.invoke(app, ["validate", str(otlp_logs)])
+    assert res.exit_code == 0
+    assert "OTLP Logs/JSON" in res.stdout

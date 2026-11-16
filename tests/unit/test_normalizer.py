@@ -132,3 +132,43 @@ def test_normalizer_auto_fix_minor_violation() -> None:
     # After auto-fix, child should be clamped to parent end
     assert child.end_time_unix_nano <= root.end_time_unix_nano
     assert len(adjustments) > 0
+
+
+def test_normalizer_clamps_events_and_logs_within_span_bounds() -> None:
+    from tracedrift.models import BlueprintEvent
+
+    normalizer = TraceNormalizer(seed=42, auto_fix=True)
+    blueprint = BlueprintTrace(
+        scenario="Clamp Events and Logs",
+        anomaly_type="normal",
+        root_cause_ref=None,
+        root_cause_summary=None,
+        spans=[
+            BlueprintSpan(
+                ref="s1",
+                parent_ref=None,
+                service_name="api-gateway",
+                name="POST /checkout",
+                kind=SpanKindEnum.SERVER,
+                offset_ms=0,
+                duration_ms=50.0,
+                events=[BlueprintEvent(name="late_event", offset_ms=80.0)],
+            )
+        ],
+        logs=[
+            BlueprintLog(
+                span_ref="s1",
+                severity="INFO",
+                body="Late log",
+                offset_ms=90.0,
+            )
+        ],
+    )
+
+    internal, adjustments = normalizer.normalize(
+        blueprint, trace_index=0, base_time_unix_nano=1700000000000000000
+    )
+    span = internal.spans[0]
+    assert span.events[0]["time_unix_nano"] <= span.end_time_unix_nano
+    assert internal.logs[0].timestamp_unix_nano <= span.end_time_unix_nano
+    assert len(adjustments) == 2

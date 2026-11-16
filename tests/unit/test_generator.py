@@ -111,3 +111,31 @@ async def test_trace_generator_retry_and_rejection(tmp_path: Path) -> None:
     assert stats.generated_success == 0
     assert stats.retries_used == 1
     assert (tmp_path / "rejected.jsonl").exists()
+
+
+@pytest.mark.asyncio
+async def test_trace_generator_stops_cleanly_on_token_budget_exceeded(tmp_path: Path) -> None:
+    from tracedrift.client import TokenBudgetExceededError
+
+    flow = load_flow_from_file("configs/e_commerce_flow.yaml")
+    with open("configs/anomalies_default.yaml", encoding="utf-8") as f:
+        catalog = AnomalyCatalog.model_validate(yaml.safe_load(f))
+
+    plan = create_generation_plan(flow, catalog, total_traces=3, anomaly_ratio=0.0, seed=42)
+
+    mock_client = LLMClient(api_key="mock", max_tokens_budget=10)
+    mock_client.generate_json = AsyncMock(  # type: ignore[method-assign]
+        side_effect=TokenBudgetExceededError("Budget reached")
+    )
+
+    generator = TraceGenerator(
+        flow=flow,
+        plan=plan,
+        client=mock_client,
+        output_dir=tmp_path,
+        concurrency=2,
+    )
+
+    stats = await generator.run()
+    assert stats.budget_exceeded is True
+    assert (tmp_path / "otlp_traces.json").exists()

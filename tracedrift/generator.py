@@ -28,6 +28,7 @@ class GenerationStats:
     retries_used: int = 0
     layer_failures: dict[int, int] = field(default_factory=lambda: {1: 0, 2: 0, 3: 0, 4: 0})
     tokens_used: int = 0
+    budget_exceeded: bool = False
 
 
 class TraceGenerator:
@@ -70,6 +71,7 @@ class TraceGenerator:
         self.correction_template = self.jinja_env.get_template("correction_v1.j2")
 
         self.stats = GenerationStats(total_requested=plan.total_traces)
+        self._allowed_services = {s.name for s in flow.services}
         self._completed_indices: set[int] = set()
         self._lock = asyncio.Lock()
 
@@ -139,6 +141,7 @@ class TraceGenerator:
 
             raw_blueprint: dict[str, Any] | None = None
             last_errors: list[str] = []
+            last_layer: int = 3
             attempt = 0
 
             while attempt <= self.max_validation_retries:
@@ -160,13 +163,17 @@ class TraceGenerator:
                     raise
                 except Exception as err:
                     last_errors = [f"Erro na chamada do modelo: {err}"]
+                    last_layer = 1
                     attempt += 1
                     continue
 
                 # 1. Validate Blueprint (Layer 1 & 2)
-                blueprint_obj, bp_report = self.validator.validate_blueprint(raw_blueprint)
+                blueprint_obj, bp_report = self.validator.validate_blueprint(
+                    raw_blueprint, allowed_services=self._allowed_services
+                )
                 if not bp_report.is_valid:
                     last_errors = bp_report.errors
+                    last_layer = bp_report.layer_failed or 1
                     attempt += 1
                     continue
 
@@ -182,6 +189,7 @@ class TraceGenerator:
                     )
                 except Exception as err:
                     last_errors = [f"Erro de normalização: {err}"]
+                    last_layer = 3
                     attempt += 1
                     continue
 
@@ -192,6 +200,7 @@ class TraceGenerator:
                 )
                 if not mat_report.is_valid:
                     last_errors = mat_report.errors
+                    last_layer = mat_report.layer_failed or 3
                     attempt += 1
                     continue
 
@@ -209,28 +218,39 @@ class TraceGenerator:
             await self._log_rejected(
                 planned=planned,
                 reason="; ".join(last_errors),
-                layer=3,
+                layer=last_layer,
                 last_raw_payload=raw_blueprint,
             )
 
     async def run(self) -> GenerationStats:
         """Executes full batch generation according to plan."""
         self._load_resume_state()
+        if self._completed_indices and self.progress_callback:
+            self.progress_callback(self.stats.generated_success, self.plan.total_traces)
         semaphore = asyncio.Semaphore(self.concurrency)
 
-        tasks = [
-            self._process_single_trace(planned, semaphore)
+        pending = [
+            asyncio.create_task(self._process_single_trace(planned, semaphore))
             for planned in self.plan.traces
             if planned.index not in self._completed_indices
         ]
 
         try:
-            await asyncio.gather(*tasks)
+            await asyncio.gather(*pending)
+        except TokenBudgetExceededError:
+            self.stats.budget_exceeded = True
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
         except asyncio.CancelledError:
-            # Clean exit on Ctrl+C / cancellation
-            pass
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
         finally:
             await self.exporter.finalize()
+            await self.client.close()
             self.stats.tokens_used = self.client.total_tokens_used
 
         return self.stats

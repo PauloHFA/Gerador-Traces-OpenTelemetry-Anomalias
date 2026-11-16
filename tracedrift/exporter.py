@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -182,7 +183,7 @@ def validate_otlp_logs_conformance(otlp_logs_data: dict[str, Any]) -> bool:
 
 
 class StreamingTraceExporter:
-    """Async streaming file exporter for datasets."""
+    """Async streaming file exporter for datasets with O(1) memory OTLP consolidation."""
 
     def __init__(self, output_dir: str | Path) -> None:
         self.output_dir = Path(output_dir)
@@ -193,35 +194,51 @@ class StreamingTraceExporter:
         self.otlp_traces_path = self.output_dir / "otlp_traces.json"
         self.otlp_logs_path = self.output_dir / "otlp_logs.json"
 
-        self._all_resource_spans: list[dict[str, Any]] = []
-        self._all_resource_logs: list[dict[str, Any]] = []
+        self._write_lock = asyncio.Lock()
 
     async def write_trace(self, trace: InternalTrace) -> None:
-        """Appends a trace to traces.jsonl, labels.jsonl, and accumulates OTLP data."""
-        # 1. Internal traces.jsonl
-        async with aiofiles.open(self.traces_path, "a", encoding="utf-8") as f:
-            await f.write(trace.model_dump_json() + "\n")
+        """Appends a trace to traces.jsonl and labels.jsonl under an async lock."""
+        trace_line = trace.model_dump_json() + "\n"
+        label_line = trace.label.model_dump_json() + "\n"
+        async with self._write_lock:
+            async with aiofiles.open(self.traces_path, "a", encoding="utf-8") as f:
+                await f.write(trace_line)
 
-        # 2. labels.jsonl
-        async with aiofiles.open(self.labels_path, "a", encoding="utf-8") as f:
-            await f.write(trace.label.model_dump_json() + "\n")
-
-        # 3. Accumulate OTLP
-        otlp_trace_dict = convert_trace_to_otlp_json(trace)
-        self._all_resource_spans.extend(otlp_trace_dict.get("resourceSpans", []))
-
-        if trace.logs:
-            otlp_logs_dict = convert_logs_to_otlp_json(trace.logs)
-            self._all_resource_logs.extend(otlp_logs_dict.get("resourceLogs", []))
+            async with aiofiles.open(self.labels_path, "a", encoding="utf-8") as f:
+                await f.write(label_line)
 
     async def finalize(self) -> None:
-        """Writes the consolidated OTLP JSON files."""
-        # Write otlp_traces.json
-        traces_payload = {"resourceSpans": self._all_resource_spans}
-        async with aiofiles.open(self.otlp_traces_path, "w", encoding="utf-8") as f:
-            await f.write(json.dumps(traces_payload, indent=2))
+        """Streams traces.jsonl into consolidated otlp_traces.json and otlp_logs.json in O(1) RAM."""
+        async with (
+            self._write_lock,
+            aiofiles.open(self.otlp_traces_path, "w", encoding="utf-8") as traces_out,
+            aiofiles.open(self.otlp_logs_path, "w", encoding="utf-8") as logs_out,
+        ):
+            await traces_out.write('{"resourceSpans": [\n')
+            await logs_out.write('{"resourceLogs": [\n')
 
-        # Write otlp_logs.json
-        logs_payload = {"resourceLogs": self._all_resource_logs}
-        async with aiofiles.open(self.otlp_logs_path, "w", encoding="utf-8") as f:
-            await f.write(json.dumps(logs_payload, indent=2))
+            first_span_rs = True
+            first_log_rs = True
+
+            if self.traces_path.exists():
+                async with aiofiles.open(self.traces_path, encoding="utf-8") as src:
+                    async for line in src:
+                        stripped = line.strip()
+                        if not stripped:
+                            continue
+                        trace_obj = InternalTrace.model_validate_json(stripped)
+                        otlp_trace_dict = convert_trace_to_otlp_json(trace_obj)
+                        for rs in otlp_trace_dict.get("resourceSpans", []):
+                            prefix = "" if first_span_rs else ",\n"
+                            await traces_out.write(prefix + json.dumps(rs))
+                            first_span_rs = False
+
+                        if trace_obj.logs:
+                            otlp_logs_dict = convert_logs_to_otlp_json(trace_obj.logs)
+                            for rl in otlp_logs_dict.get("resourceLogs", []):
+                                prefix = "" if first_log_rs else ",\n"
+                                await logs_out.write(prefix + json.dumps(rl))
+                                first_log_rs = False
+
+            await traces_out.write("\n]}\n")
+            await logs_out.write("\n]}\n")

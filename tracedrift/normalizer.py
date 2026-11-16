@@ -143,7 +143,6 @@ class TraceNormalizer:
                         ratio = overflow_ns / parent_duration_ns if parent_duration_ns > 0 else 1.0
 
                         if self.auto_fix and ratio <= 0.05:
-                            # Adjust child duration to fit parent
                             adjusted_duration_ns = parent_end_nano - span_start_nano
                             if adjusted_duration_ns > 0:
                                 span_end_nano = parent_end_nano
@@ -152,13 +151,12 @@ class TraceNormalizer:
                                     f"para caber no pai '{parent_ref}'."
                                 )
                                 self.adjustments.append(adj_msg)
-                        elif self.auto_fix and ratio <= 0.05:
-                            # Expand parent end time up to 5% if possible
-                            parent_end_nano = span_end_nano
-                            end_nano_by_ref[parent_ref] = parent_end_nano
-                            self.adjustments.append(
-                                f"Auto-fix: pai '{parent_ref}' estendido em {overflow_ns / 1_000_000:.2f}ms."
-                            )
+                            else:
+                                # Se o filho começou após o fim do pai (<=5%), estende o pai
+                                end_nano_by_ref[parent_ref] = span_end_nano
+                                self.adjustments.append(
+                                    f"Auto-fix: pai '{parent_ref}' estendido em {overflow_ns / 1_000_000:.2f}ms."
+                                )
 
                     start_nano_by_ref[span.ref] = span_start_nano
                     end_nano_by_ref[span.ref] = span_end_nano
@@ -195,6 +193,11 @@ class TraceNormalizer:
             events = []
             for ev in span.events:
                 ev_time_nano = s_start + int(ev.offset_ms * 1_000_000)
+                if self.auto_fix and ev_time_nano > s_end:
+                    ev_time_nano = s_end
+                    self.adjustments.append(
+                        f"Auto-fix: evento '{ev.name}' do span '{span.ref}' ajustado para o fim do span."
+                    )
                 events.append(
                     {
                         "name": ev.name,
@@ -258,7 +261,13 @@ class TraceNormalizer:
             corr_span_id = ref_to_span_id[log.span_ref]
             corr_span = span_by_ref[log.span_ref]
             s_start = start_nano_by_ref[log.span_ref]
+            s_end = end_nano_by_ref[log.span_ref]
             log_time = s_start + int(log.offset_ms * 1_000_000)
+            if self.auto_fix and log_time > s_end:
+                log_time = s_end
+                self.adjustments.append(
+                    f"Auto-fix: log do span '{log.span_ref}' ajustado para o fim do span."
+                )
 
             sev_upper = log.severity.upper()
             sev_num = SEVERITY_TEXT_TO_NUMBER.get(sev_upper, 9)

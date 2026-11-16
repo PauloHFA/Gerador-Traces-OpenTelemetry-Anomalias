@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -56,12 +57,17 @@ class LLMClient:
         self.total_prompt_tokens = 0
         self.total_completion_tokens = 0
         self.total_tokens_used = 0
+        self._budget_lock = asyncio.Lock()
 
         self.client = AsyncOpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
             http_client=http_client,
         )
+
+    async def close(self) -> None:
+        """Closes the underlying AsyncOpenAI HTTP client."""
+        await self.client.close()
 
     def extract_json(self, raw_text: str) -> dict[str, Any]:
         """Extracts JSON object from text, stripping markdown code blocks if present."""
@@ -96,10 +102,11 @@ class LLMClient:
         temperature: float = 0.7,
     ) -> dict[str, Any]:
         """Sends request to LLM and parses JSON response."""
-        if self.max_tokens_budget and self.total_tokens_used >= self.max_tokens_budget:
-            raise TokenBudgetExceededError(
-                f"Orçamento máximo de tokens ({self.max_tokens_budget}) atingido. Total usado: {self.total_tokens_used}."
-            )
+        async with self._budget_lock:
+            if self.max_tokens_budget and self.total_tokens_used >= self.max_tokens_budget:
+                raise TokenBudgetExceededError(
+                    f"Orçamento máximo de tokens ({self.max_tokens_budget}) atingido. Total usado: {self.total_tokens_used}."
+                )
 
         messages: list[ChatCompletionMessageParam] = []
         if system_prompt:
@@ -115,9 +122,10 @@ class LLMClient:
 
         usage = response.usage
         if usage:
-            self.total_prompt_tokens += usage.prompt_tokens
-            self.total_completion_tokens += usage.completion_tokens
-            self.total_tokens_used += usage.total_tokens
+            async with self._budget_lock:
+                self.total_prompt_tokens += usage.prompt_tokens
+                self.total_completion_tokens += usage.completion_tokens
+                self.total_tokens_used += usage.total_tokens
 
         content = response.choices[0].message.content or "{}"
         return self.extract_json(content)

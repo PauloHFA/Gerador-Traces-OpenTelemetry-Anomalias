@@ -55,7 +55,9 @@ SECRET_PATTERNS = [
 
 class TraceValidator:
     def validate_blueprint(
-        self, raw_blueprint: dict[str, Any]
+        self,
+        raw_blueprint: dict[str, Any],
+        allowed_services: set[str] | None = None,
     ) -> tuple[BlueprintTrace | None, ValidationReport]:
         """Layer 1 & Layer 2: Validates schema and graph hierarchy of blueprint."""
         # Layer 1: Schema Validation
@@ -128,6 +130,20 @@ class TraceValidator:
                     f"Falha na Camada 2 (Grafo): Spans isolados/órfãos detectados: {sorted(unreachable)}."
                 ],
             )
+
+        if allowed_services is not None:
+            unknown_services = sorted(
+                {s.service_name for s in blueprint.spans if s.service_name not in allowed_services}
+            )
+            if unknown_services:
+                return blueprint, ValidationReport(
+                    is_valid=False,
+                    layer_failed=2,
+                    errors=[
+                        f"Falha na Camada 2 (Fluxo): Serviços desconhecidos no blueprint: {unknown_services}. "
+                        f"Permitidos: {sorted(allowed_services)}."
+                    ],
+                )
 
         return blueprint, ValidationReport(is_valid=True)
 
@@ -209,6 +225,25 @@ class TraceValidator:
                 )
 
         # Correlated Logs Check (RF07)
+        for log_item in trace.logs:
+            corr_span = span_map.get(log_item.span_id)
+            if corr_span is not None and (
+                log_item.timestamp_unix_nano < corr_span.start_time_unix_nano
+                or log_item.timestamp_unix_nano > corr_span.end_time_unix_nano
+            ):
+                errors.append(
+                    f"Violação temporal de log: timestamp do log ({log_item.timestamp_unix_nano}) fora do intervalo do span '{corr_span.name}'."
+                )
+
+        if not trace.label.is_anomalous and trace.logs:
+            error_logs = sum(
+                1 for lg in trace.logs if lg.severity_text in ("ERROR", "FATAL", "CRITICAL")
+            )
+            if (error_logs / len(trace.logs)) > 0.02:
+                errors.append(
+                    f"RF07: Trace normal possui {error_logs}/{len(trace.logs)} logs de erro (> 2%)."
+                )
+
         for s in trace.spans:
             if s.status.get("code") == StatusCodeEnum.ERROR.value:
                 matching_logs = [
@@ -244,12 +279,9 @@ class TraceValidator:
                     f"Cascading Timeout: duração do span raiz ({root_duration_ms:.1f}ms) é menor que timeout ({slo_timeout_ms:.1f}ms)."
                 )
 
-        if errors:
-            return ValidationReport(
-                is_valid=False, layer_failed=3, errors=errors, warnings=warnings
-            )
+        layer3_failed = bool(errors)
 
-        # Layer 4: Security and PII Validation
+        # Layer 4: Security and PII Validation (sempre executada, mesmo se Layer 3 falhar)
         text_corpus = []
         for s in trace.spans:
             text_corpus.append(s.name)
@@ -261,6 +293,7 @@ class TraceValidator:
                 text_corpus.append(f"{k}={v}")
 
         full_text = " ".join(text_corpus)
+        layer4_errors: list[str] = []
 
         # Scan IPv4
         found_ips = IPV4_PATTERN.findall(full_text)
@@ -269,7 +302,7 @@ class TraceValidator:
                 ip_obj = ipaddress.ip_address(ip_str)
                 is_allowed = any(ip_obj in net for net in ALLOWED_IPV4_NETWORKS)
                 if not is_allowed:
-                    errors.append(
+                    layer4_errors.append(
                         f"Falha na Camada 4 (Segurança): IP público real detectado: '{ip_str}'. Permitidos apenas RFC 5737 e RFC 1918."
                     )
             except ValueError:
@@ -280,20 +313,26 @@ class TraceValidator:
         for email in found_emails:
             domain = email.split("@")[-1].lower()
             if domain not in ALLOWED_EMAIL_DOMAINS:
-                errors.append(
+                layer4_errors.append(
                     f"Falha na Camada 4 (Privacidade): E-mail com domínio real detectado: '{email}'. Permitidos apenas domínios de documentação (ex: example.com)."
                 )
 
         # Scan Secrets
         for sec_pattern in SECRET_PATTERNS:
             if sec_pattern.search(full_text):
-                errors.append(
+                layer4_errors.append(
                     "Falha na Camada 4 (Segurança): Padrão de credencial/token sensível detectado no dataset."
                 )
 
+        if layer4_errors:
+            errors.extend(layer4_errors)
+
         if errors:
             return ValidationReport(
-                is_valid=False, layer_failed=4, errors=errors, warnings=warnings
+                is_valid=False,
+                layer_failed=3 if layer3_failed else 4,
+                errors=errors,
+                warnings=warnings,
             )
 
         return ValidationReport(is_valid=True, warnings=warnings)

@@ -109,10 +109,10 @@ def generate_dataset_card(
     """Generates DATASET_CARD.md summarizing dataset characteristics and synthetic nature."""
     target = Path(dataset_dir) / "DATASET_CARD.md" if output_path is None else Path(output_path)
 
-    card_content = f"""# Dataset Card — TraceDrift Synthetic Dataset
+    card_content = f"""# Dataset Card — Gerador-Traces-OpenTelemetry-Anomalias Synthetic Dataset
 
 ## Visão Geral
-Este dataset foi gerado de forma **100% sintética** pelo **TraceDrift**, uma ferramenta para simulação realista de rastreamento distribuído (OpenTelemetry spans) e logs correlacionados com padrões de falha e degradações de microsserviços.
+Este dataset foi gerado de forma **100% sintética** pelo **Gerador-Traces-OpenTelemetry-Anomalias (`tracedrift`)**, uma ferramenta para simulação realista de rastreamento distribuído (OpenTelemetry spans) e logs correlacionados com padrões de falha e degradações de microsserviços.
 
 - **Natureza dos Dados**: Sintético (Livre de PII, senhas ou credenciais de produção).
 - **Modelo Gerador**: `{model_name}`
